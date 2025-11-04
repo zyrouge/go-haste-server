@@ -18,22 +18,20 @@ var books = []*Book{
 	{1, "Bottom-Tier Character Tomozaki"},
 }
 
-type BooksMethodHandler struct{}
-
 func NewBooksRouter() http.Handler {
-	return haste_router.NewHasteRouter(&BooksMethodHandler{})
+	router := haste_router.NewHasteRouter()
+	router.SetParamName("bookId")
+	router.HandleGet(http.HandlerFunc(HandleBooksGet))
+	router.HandleGetEntity(http.HandlerFunc(HandleBooksGetEntity))
+	return router
 }
 
-func (*BooksMethodHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
+func HandleBooksGet(w http.ResponseWriter, r *http.Request) {
 	bytes, _ := json.Marshal(books)
 	w.Write(bytes)
 }
 
-func (*BooksMethodHandler) GetParamName() string {
-	return "bookId"
-}
-
-func (*BooksMethodHandler) HandleGetEntity(w http.ResponseWriter, r *http.Request) {
+func HandleBooksGetEntity(w http.ResponseWriter, r *http.Request) {
 	routerState := haste_router.GetHasteRouterStateFromRequest(r)
 	bookId, _ := strconv.Atoi(routerState.Params["bookId"])
 	for _, x := range books {

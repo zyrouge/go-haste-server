@@ -6,85 +6,108 @@ import (
 )
 
 type HasteRouter struct {
-	Handler       any
-	NamedHandlers map[string]http.Handler
+	ParamName           string
+	Middleware          http.Handler
+	GetHandler          http.Handler
+	PostHandler         http.Handler
+	DeleteHandler       http.Handler
+	GetEntityHandler    http.Handler
+	PostEntityHandler   http.Handler
+	DeleteEntityHandler http.Handler
+	DynamicHandler      http.Handler
+	FallbackHandler     http.Handler
+	NamedHandlers       map[string]http.Handler
 }
 
-type HasteRouterPostHandler interface {
-	HandlePost(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterGetHandler interface {
-	HandleGet(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterDeleteHandler interface {
-	HandleDelete(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterParamMethod interface {
-	GetParamName() string
-}
-
-type HasteRouterGetEntityHandler interface {
-	HasteRouterParamMethod
-	HandleGetEntity(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterPostEntityHandler interface {
-	HasteRouterParamMethod
-	HandlePostEntity(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterDeleteEntityHandler interface {
-	HasteRouterParamMethod
-	HandleDeleteEntity(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterDynamicHandler interface {
-	HasteRouterParamMethod
-	HandleDynamic(w http.ResponseWriter, r *http.Request)
-}
-
-type HasteRouterFallbackHandler interface {
-	HandleFallback(w http.ResponseWriter, r *http.Request)
-}
-
-func NewHasteRouter(handler any) *HasteRouter {
+func NewHasteRouter() *HasteRouter {
 	router := &HasteRouter{
-		Handler:       handler,
 		NamedHandlers: map[string]http.Handler{},
 	}
 	return router
 }
 
-func (router *HasteRouter) SetNamedHandler(name string, handler http.Handler) {
+func (router *HasteRouter) SetParamName(name string) {
+	router.ParamName = name
+}
+
+func (router *HasteRouter) Use(middleware HasteRouterMiddlewareFunc) {
+	next := router.Middleware
+	if next == nil {
+		next = router
+	}
+	router.Middleware = middleware(next)
+}
+
+func (router *HasteRouter) HandleGet(handler http.Handler) {
+	router.GetHandler = handler
+}
+
+func (router *HasteRouter) HandlePost(handler http.Handler) {
+	router.PostHandler = handler
+}
+
+func (router *HasteRouter) HandleDelete(handler http.Handler) {
+	router.DeleteHandler = handler
+}
+
+func (router *HasteRouter) HandleGetEntity(handler http.Handler) {
+	router.GetEntityHandler = handler
+}
+
+func (router *HasteRouter) HandlePostEntity(handler http.Handler) {
+	router.PostEntityHandler = handler
+}
+
+func (router *HasteRouter) HandleDeleteEntity(handler http.Handler) {
+	router.DeleteEntityHandler = handler
+}
+
+func (router *HasteRouter) HandleDynamic(handler http.Handler) {
+	router.DynamicHandler = handler
+}
+
+func (router *HasteRouter) HandleFallback(handler http.Handler) {
+	router.FallbackHandler = handler
+}
+
+func (router *HasteRouter) HandleNamed(name string, handler http.Handler) {
 	router.NamedHandlers[name] = handler
 }
 
 func (router *HasteRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	state, ok := r.Context().Value(HasteRouterStateContextKey).(*HasteRouterState)
+	ctx := r.Context()
+	if router.Middleware != nil {
+		done := ctx.Value(HasteRouterMiddlewareInvokedContextKey)
+		if done == nil {
+			ctx = context.WithValue(ctx, HasteRouterMiddlewareInvokedContextKey, true)
+			r = r.WithContext(ctx)
+			router.Middleware.ServeHTTP(w, r)
+			return
+		}
+	}
+	state, ok := ctx.Value(HasteRouterStateContextKey).(*HasteRouterState)
 	if !ok {
 		state = NewHasteRouterState(r)
-		r = r.WithContext(context.WithValue(r.Context(), HasteRouterStateContextKey, state))
+		ctx = context.WithValue(ctx, HasteRouterStateContextKey, state)
+		r = r.WithContext(ctx)
 	}
 	if !state.PathTraveller.HasNext() {
 		switch r.Method {
 		case http.MethodGet:
-			if handler, ok := router.Handler.(HasteRouterGetHandler); ok {
-				handler.HandleGet(w, r)
+			if router.GetHandler != nil {
+				router.GetHandler.ServeHTTP(w, r)
 				return
 			}
 
 		case http.MethodPost:
-			if handler, ok := router.Handler.(HasteRouterPostHandler); ok {
-				handler.HandlePost(w, r)
+			if router.PostHandler != nil {
+				router.PostHandler.ServeHTTP(w, r)
 				return
 			}
 
 		case http.MethodDelete:
-			if handler, ok := router.Handler.(HasteRouterDeleteHandler); ok {
-				handler.HandleDelete(w, r)
+			if router.DeleteHandler != nil {
+				router.DeleteHandler.ServeHTTP(w, r)
 				return
 			}
 		}
@@ -93,29 +116,26 @@ func (router *HasteRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		next, _ := state.PathTraveller.Peek()
 		switch r.Method {
 		case http.MethodGet:
-			if handler, ok := router.Handler.(HasteRouterGetEntityHandler); ok {
+			if router.GetEntityHandler != nil {
 				state.PathTraveller.Next()
-				paramName := handler.GetParamName()
-				state.Params[paramName] = next
-				handler.HandleGetEntity(w, r)
+				state.Params[router.ParamName] = next
+				router.GetEntityHandler.ServeHTTP(w, r)
 				return
 			}
 
-		case http.MethodPut:
-			if handler, ok := router.Handler.(HasteRouterPostEntityHandler); ok {
+		case http.MethodPost:
+			if router.PostEntityHandler != nil {
 				state.PathTraveller.Next()
-				paramName := handler.GetParamName()
-				state.Params[paramName] = next
-				handler.HandlePostEntity(w, r)
+				state.Params[router.ParamName] = next
+				router.PostEntityHandler.ServeHTTP(w, r)
 				return
 			}
 
 		case http.MethodDelete:
-			if handler, ok := router.Handler.(HasteRouterDeleteEntityHandler); ok {
+			if router.DeleteEntityHandler != nil {
 				state.PathTraveller.Next()
-				paramName := handler.GetParamName()
-				state.Params[paramName] = next
-				handler.HandleDeleteEntity(w, r)
+				state.Params[router.ParamName] = next
+				router.DeleteEntityHandler.ServeHTTP(w, r)
 				return
 			}
 		}
@@ -128,16 +148,15 @@ func (router *HasteRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			namedHandler.ServeHTTP(w, r)
 			return
 		}
-		if handler, ok := router.Handler.(HasteRouterDynamicHandler); ok {
+		if router.DynamicHandler != nil {
 			state.PathTraveller.Next()
-			paramName := handler.GetParamName()
-			state.Params[paramName] = next
-			handler.HandleDynamic(w, r)
+			state.Params[router.ParamName] = next
+			router.DynamicHandler.ServeHTTP(w, r)
 			return
 		}
 	}
-	if handler, ok := router.Handler.(HasteRouterFallbackHandler); ok {
-		handler.HandleFallback(w, r)
+	if router.FallbackHandler != nil {
+		router.FallbackHandler.ServeHTTP(w, r)
 		return
 	}
 	// TODO
